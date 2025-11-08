@@ -1,47 +1,53 @@
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
-from uuid import uuid4
-from datetime import datetime, timezone
-import json
+from pydantic import BaseModel
+from typing import Optional
+from app.utils.cache_handler import load_reports, save_reports
+import hashlib, uuid, datetime
 
-from ..core.triage import evaluate_text
-from ..db.database import insert_report
-from ..utils.receipts import make_receipt
-
-router = APIRouter(tags=["reports"])
+router = APIRouter(prefix="/api", tags=["reports"])
 
 class ReportIn(BaseModel):
-    summary: str = Field(..., min_length=10, max_length=4000)
-    category: str = Field(..., description="e.g., phishing, scam, malware, harassment")
+    summary: str
+    category: str
 
-class ReportOut(BaseModel):
-    id: str
-    score: float
-    reasons: list[str]
-    receipt: str
-    created_at: str
+@router.post("/reports")
+def create_report(payload: ReportIn):
+    db = load_reports()
+    now = datetime.datetime.utcnow().isoformat() + "Z"
+    rid = str(uuid.uuid4())
+    keywords = ["password", "otp", "bank", "wallet", "urgent", "verify"]
+    score = min(1.0, sum(1 for k in keywords if k in payload.summary.lower())/len(keywords) + 0.2)
+    receipt = hashlib.sha256((rid + payload.summary + payload.category).encode()).hexdigest()
 
-@router.post("/reports", response_model=ReportOut)
-async def create_report(payload: ReportIn):
-    report_id = str(uuid4())
-    created_at = datetime.now(timezone.utc).isoformat()
-
-    score, reasons = evaluate_text(payload.summary)
-    record = {
-        "id": report_id,
+    item = {
+        "id": rid,
         "summary": payload.summary,
         "category": payload.category,
         "score": score,
-        "reasons": json.dumps(reasons),
-        "created_at": created_at,
-    }
-    insert_report(record)
-
-    receipt = make_receipt(report_id, created_at)
-    return {
-        "id": report_id,
-        "score": score,
-        "reasons": reasons,
+        "reasons": [k for k in keywords if k in payload.summary.lower()],
         "receipt": receipt,
-        "created_at": created_at,
+        "created_at": now
     }
+    db["items"].append(item)
+    db["items"] = db["items"][-1000:]
+    save_reports(db["items"])
+    return item
+
+@router.get("/receipts/{rid}")
+def verify_receipt(rid: str, receipt: Optional[str] = None):
+    db = load_reports()
+    found = next((x for x in db["items"] if x["id"] == rid), None)
+    if not found:
+        return {"exists": False, "receipt_matches": None, "expected_receipt": None}
+    expected = found["receipt"]
+    return {
+        "exists": True,
+        "receipt_matches": (receipt == expected) if receipt is not None else None,
+        "expected_receipt": expected
+    }
+
+@router.get("/dashboard/recent")
+def recent(limit: int = 12):
+    db = load_reports()
+    items = sorted(db["items"], key=lambda x: x.get("created_at",""), reverse=True)[:max(0, min(limit, 200))]
+    return {"items": items}

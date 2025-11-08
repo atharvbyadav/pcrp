@@ -1,9 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="PCRP Backend", version="4.0.0")
+app = FastAPI(title="PCRP Backend", version="4.0.1")
 
-# Strict CORS: GitHub Pages + localhost dev
 origins = [
     "https://atharvbyadav.github.io",
     "https://atharvbyadav.github.io/pcrp",
@@ -19,7 +18,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include your existing core routers if present in your project
 try:
     from app.routes import reports as core_reports
     app.include_router(core_reports.router)
@@ -32,10 +30,10 @@ try:
 except Exception:
     pass
 
-# Include new external intelligence routers
-from app.routes import external, dashboard
+from app.routes import external, dashboard, reports
 app.include_router(external.router)
 app.include_router(dashboard.router)
+app.include_router(reports.router)
 
 @app.get("/api/health")
 def health():

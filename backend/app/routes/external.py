@@ -23,15 +23,21 @@ async def fetch_json(client: httpx.AsyncClient, url: str, use_post: bool = False
         else:
             r = await client.get(url)
         r.raise_for_status()
-        return r.json()
+        try:
+            return r.json()
+        except Exception:
+            return None
     except Exception:
         return None
 
 def normalize(results: List[Any]) -> List[Dict[str, Any]]:
     merged = []
-    blackbook, urlhaus, phish, feodo, malb = results
+    try:
+        blackbook, urlhaus, phish, feodo, malb = results
+    except Exception:
+        blackbook = urlhaus = phish = feodo = malb = None
 
-    if blackbook:
+    if isinstance(blackbook, dict):
         for d in blackbook.get("domains", []):
             merged.append({
                 "title": d.get("domain"),
@@ -41,8 +47,8 @@ def normalize(results: List[Any]) -> List[Dict[str, Any]]:
                 "description": d.get("category")
             })
 
-    if urlhaus:
-        for e in urlhaus.get("urls", [])[:50]:
+    if isinstance(urlhaus, dict):
+        for e in (urlhaus.get("urls", []) or [])[:50]:
             merged.append({
                 "title": e.get("url"),
                 "source": "URLHaus",
@@ -51,7 +57,7 @@ def normalize(results: List[Any]) -> List[Dict[str, Any]]:
                 "description": e.get("url_status")
             })
 
-    if phish:
+    if isinstance(phish, list):
         for e in phish[:50]:
             merged.append({
                 "title": e.get("url"),
@@ -61,8 +67,8 @@ def normalize(results: List[Any]) -> List[Dict[str, Any]]:
                 "description": e.get("target")
             })
 
-    if feodo:
-        for ip in feodo.get("ipblocklist", [])[:50]:
+    if isinstance(feodo, dict):
+        for ip in (feodo.get("ipblocklist", []) or [])[:50]:
             merged.append({
                 "title": ip.get("ip_address"),
                 "source": "FeodoTracker",
@@ -71,7 +77,7 @@ def normalize(results: List[Any]) -> List[Dict[str, Any]]:
                 "description": f"Botnet: {ip.get('botnet')}"
             })
 
-    if malb and malb.get("data"):
+    if isinstance(malb, dict) and malb.get("data"):
         for e in malb["data"][:50]:
             merged.append({
                 "title": e.get("sha256_hash"),
@@ -90,7 +96,7 @@ async def get_threats():
     if last_fetch and (time.time() - last_fetch) < TTL and cached.get("items"):
         return {"items": cached["items"], "last_updated": cached.get("last_updated")}
 
-    async with httpx.AsyncClient(timeout=12.0) as client:
+    async with httpx.AsyncClient(timeout=15.0) as client:
         results = await asyncio.gather(
             fetch_json(client, SOURCES["blackbook"]),
             fetch_json(client, SOURCES["urlhaus"]),
@@ -100,7 +106,6 @@ async def get_threats():
         )
 
     merged = normalize(results)
-
     if not merged and cached.get("items"):
         return {"items": cached["items"], "last_updated": cached.get("last_updated")}
 
