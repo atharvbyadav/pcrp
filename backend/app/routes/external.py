@@ -1,48 +1,38 @@
-# app/routes/external.py
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 import httpx, asyncio, time
+from typing import List, Dict, Any
+from app.utils.cache_handler import load_threats, save_threats, trim_24h
 
 router = APIRouter(prefix="/api/external", tags=["external"])
 
-CACHE = {"timestamp": 0, "data": []}
-CACHE_TTL = 300  # 5 minutes
+TTL = 300  # 5 minutes
+last_fetch = 0
 
+SOURCES = {
+    "blackbook": "https://raw.githubusercontent.com/stamparm/blackbook/master/blackbook.json",
+    "urlhaus": "https://urlhaus.abuse.ch/downloads/json_recent/",
+    "phishyachts": "https://phish.sinking.yachts/v2/recent",
+    "feodo": "https://feodotracker.abuse.ch/downloads/ipblocklist.json",
+    "malwarebazaar": "https://mb-api.abuse.ch/api/v1/",
+}
 
-@router.get("/threats")
-async def get_threats():
-    # serve cached if fresh
-    if time.time() - CACHE["timestamp"] < CACHE_TTL:
-        return {"items": CACHE["data"]}
+async def fetch_json(client: httpx.AsyncClient, url: str, use_post: bool = False):
+    try:
+        if use_post:
+            r = await client.post(url, data={"query": "get_recent"})
+        else:
+            r = await client.get(url)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
 
-    sources = [
-        # --- General threat lists ---
-        "https://raw.githubusercontent.com/stamparm/blackbook/master/blackbook.json",  # domains
-        "https://urlhaus.abuse.ch/downloads/json_recent/",  # malware URLs
-        # --- IP & phishing feeds ---
-        "https://phish.sinking.yachts/v2/recent",           # phishing URLs
-        "https://feodotracker.abuse.ch/downloads/ipblocklist.json",  # C2 IPs
-        # --- Malware bazaar (abuse.ch) ---
-        "https://mb-api.abuse.ch/api/v1/",                  # MalwareBazaar (requires POST for search)
-    ]
-
-    async def fetch_json(url):
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                if "malwarebazaar" in url:
-                    r = await client.post(url, data={"query": "get_recent"})
-                else:
-                    r = await client.get(url)
-                r.raise_for_status()
-                return r.json()
-        except Exception:
-            return None
-
-    results = await asyncio.gather(*[fetch_json(u) for u in sources])
-
+def normalize(results: List[Any]) -> List[Dict[str, Any]]:
     merged = []
-    # Blackbook domains
-    if results[0]:
-        for d in results[0].get("domains", []):
+    blackbook, urlhaus, phish, feodo, malb = results
+
+    if blackbook:
+        for d in blackbook.get("domains", []):
             merged.append({
                 "title": d.get("domain"),
                 "source": "BlackBook",
@@ -50,9 +40,9 @@ async def get_threats():
                 "time": d.get("last_seen"),
                 "description": d.get("category")
             })
-    # URLHaus
-    if results[1]:
-        for e in results[1].get("urls", [])[:20]:
+
+    if urlhaus:
+        for e in urlhaus.get("urls", [])[:50]:
             merged.append({
                 "title": e.get("url"),
                 "source": "URLHaus",
@@ -60,9 +50,9 @@ async def get_threats():
                 "time": e.get("date_added"),
                 "description": e.get("url_status")
             })
-    # Sinking Yachts (Phish)
-    if results[2]:
-        for e in results[2][:20]:
+
+    if phish:
+        for e in phish[:50]:
             merged.append({
                 "title": e.get("url"),
                 "source": "PhishYachts",
@@ -70,9 +60,9 @@ async def get_threats():
                 "time": e.get("date_added"),
                 "description": e.get("target")
             })
-    # Feodo Tracker
-    if results[3]:
-        for ip in results[3].get("ipblocklist", [])[:20]:
+
+    if feodo:
+        for ip in feodo.get("ipblocklist", [])[:50]:
             merged.append({
                 "title": ip.get("ip_address"),
                 "source": "FeodoTracker",
@@ -80,9 +70,9 @@ async def get_threats():
                 "time": ip.get("first_seen"),
                 "description": f"Botnet: {ip.get('botnet')}"
             })
-    # MalwareBazaar
-    if results[4] and results[4].get("data"):
-        for e in results[4]["data"][:20]:
+
+    if malb and malb.get("data"):
+        for e in malb["data"][:50]:
             merged.append({
                 "title": e.get("sha256_hash"),
                 "source": "MalwareBazaar",
@@ -91,6 +81,29 @@ async def get_threats():
                 "description": e.get("file_name")
             })
 
-    CACHE["timestamp"] = time.time()
-    CACHE["data"] = merged
+    return trim_24h(merged)
+
+@router.get("/threats")
+async def get_threats():
+    global last_fetch
+    cached = load_threats()
+    if last_fetch and (time.time() - last_fetch) < TTL and cached.get("items"):
+        return {"items": cached["items"], "last_updated": cached.get("last_updated")}
+
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        results = await asyncio.gather(
+            fetch_json(client, SOURCES["blackbook"]),
+            fetch_json(client, SOURCES["urlhaus"]),
+            fetch_json(client, SOURCES["phishyachts"]),
+            fetch_json(client, SOURCES["feodo"]),
+            fetch_json(client, SOURCES["malwarebazaar"], use_post=True),
+        )
+
+    merged = normalize(results)
+
+    if not merged and cached.get("items"):
+        return {"items": cached["items"], "last_updated": cached.get("last_updated")}
+
+    save_threats(merged)
+    last_fetch = time.time()
     return {"items": merged}
