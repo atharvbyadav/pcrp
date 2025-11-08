@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .routes import reports, receipts, dashboard
 from .db.database import init_db
+from app.routes import external
 import os
 
 app = FastAPI(title="Public Cyber Incident Reporting Portal (PCRP)")
@@ -34,3 +35,4 @@ def root():
 app.include_router(reports.router, prefix="/api")
 app.include_router(receipts.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
+app.include_router(external.router)
