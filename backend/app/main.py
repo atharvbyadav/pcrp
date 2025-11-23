@@ -3,20 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="PCRP Backend", version="4.0.1")
 
-origins = [
-    "https://atharvbyadav.github.io",
-    "https://atharvbyadav.github.io/pcrp",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://atharv.softwaremonkeys.in",
-    "https://atharv.softwaremonkeys.in",
-    "http://atharv.softwaremonkeys.in/pcrp",
-    "https://atharv.softwaremonkeys.in/pcrp",
-]
+raw_origins = os.getenv("ALLOWED_ORIGINS", "")
+origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=origins if origins else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
