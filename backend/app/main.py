@@ -6,6 +6,8 @@ app = FastAPI(title="PCRP Backend", version="4.0.1")
 origins = [
     "https://atharvbyadav.github.io",
     "https://atharvbyadav.github.io/pcrp",
+    "http://atharv.softwaremonkeys.in",
+    "http://atharv.softwaremonkeys.in/pcrp",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
